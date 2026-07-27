@@ -70,14 +70,7 @@ check('bare num', pt('42'), { id = 42 })
 check('bare sha', pt('a1b2c3d'), { sha = 'a1b2c3d' })
 check('garbage', pt('???'), nil)
 
--- Credentials are never sourced from the environment unless explicitly opted in: a var exported for
--- the `az devops` CLI must not silently decide which identity the editor authenticates as.
-check('pat_from_env defaults off', config.options.pat_from_env, false)
-
--- get_pr_diff / get_commit shell out to git. Branch names come from whoever opened the PR and git's
--- ref rules permit `$(…)`, backticks and `|`, so passing them through a shell turns "read a PR's
--- diff" into arbitrary code execution. These drive the real functions against a throwaway repo and
--- assert the payload did not run.
+--- Runs `fn` with the cwd inside a throwaway git repo, then cleans up.
 local function in_temp_repo(fn)
   local dir = vim.fn.tempname()
   vim.fn.mkdir(dir, 'p')
@@ -93,6 +86,40 @@ local function in_temp_repo(fn)
   end
 end
 
+-- Credentials are never sourced from the environment unless explicitly opted in: a var exported for
+-- the `az devops` CLI must not silently decide which identity the editor authenticates as.
+check('pat_from_env defaults off', config.options.pat_from_env, false)
+
+-- PRs open as drafts, and a repo's PR template prefills the description. Publishing on create
+-- notifies every reviewer, and an empty description silently skips a checklist reviewers expect.
+check('create_draft defaults on', config.options.create_draft, true)
+check('create_template defaults on', config.options.create_template, true)
+
+local pr = require('azdo.pr')
+in_temp_repo(function(dir)
+  check('no template, no repo template', pr._read_pr_template(), nil)
+
+  vim.fn.mkdir(dir .. '/.azuredevops', 'p')
+  vim.fn.writefile({ '### What has changed?', '', '- [ ] Tests added' }, dir .. '/.azuredevops/pull_request_template.md')
+  check('finds .azuredevops template', pr._read_pr_template(), { '### What has changed?', '', '- [ ] Tests added' })
+
+  -- .azuredevops wins: it is the location Azure DevOps itself checks first.
+  vim.fn.mkdir(dir .. '/docs', 'p')
+  vim.fn.writefile({ 'docs one' }, dir .. '/docs/pull_request_template.md')
+  check('search order prefers .azuredevops', pr._read_pr_template()[1], '### What has changed?')
+
+  vim.fn.delete(dir .. '/.azuredevops', 'rf')
+  check('falls back to docs/', pr._read_pr_template(), { 'docs one' })
+
+  config.setup({ create_template = false })
+  check('create_template = false opts out', pr._read_pr_template(), nil)
+  config.setup({})
+end)
+
+-- get_pr_diff / get_commit shell out to git. Branch names come from whoever opened the PR and git's
+-- ref rules permit `$(…)`, backticks and `|`, so passing them through a shell turns "read a PR's
+-- diff" into arbitrary code execution. These drive the real functions against a throwaway repo and
+-- assert the payload did not run.
 in_temp_repo(function(dir)
   local marker = dir .. '/pwned'
   local done = false

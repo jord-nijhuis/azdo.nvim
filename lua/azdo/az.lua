@@ -746,6 +746,11 @@ function M.create_pr(repo, source, target, title, description, cb)
     targetRefName = 'refs/heads/' .. target,
     title = title,
     description = description,
+    -- Publishing on create notifies every required reviewer immediately, so the
+    -- first push after a review comment spams them again. Opening as a draft
+    -- makes "ready for review" a deliberate act instead of a side effect of
+    -- creating the PR. See `create_draft`.
+    isDraft = config.options.create_draft ~= false,
   }
   az_rest('post', with_api(f('%s/pullRequests', repo_base(repo))), body, function(resp, stderr, code)
     if code ~= 0 or not resp or not resp.pullRequestId then

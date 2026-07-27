@@ -57,6 +57,44 @@ local function resolve_local_repo()
   return repo
 end
 
+--- Azure DevOps' search order for a repo's default pull-request template, plus
+--- `.github/` for repos that keep it there. Azure DevOps also supports a
+--- `pull_request_template/` *directory* of named templates; picking between those
+--- is a prompt this does not try to be, so only the default file is read.
+local PR_TEMPLATE_PATHS = {
+  '.azuredevops/pull_request_template.md',
+  '.vsts/pull_request_template.md',
+  'docs/pull_request_template.md',
+  'pull_request_template.md',
+  '.github/pull_request_template.md',
+}
+
+--- Reads the repository's pull-request template, if it has one and
+--- `create_template` is on.
+---
+--- Resolved against the repo root rather than the working directory so it is
+--- found from a subdirectory or a worktree. Exposed for tests.
+--- @return string[]? lines
+function M._read_pr_template()
+  if config.options.create_template == false then
+    return nil
+  end
+  local root = vim.fn.systemlist({ 'git', 'rev-parse', '--show-toplevel' })[1]
+  if vim.v.shell_error ~= 0 or not root or root == '' then
+    return nil
+  end
+  for _, rel in ipairs(PR_TEMPLATE_PATHS) do
+    local path = root .. '/' .. rel
+    if vim.fn.filereadable(path) == 1 then
+      local lines = vim.fn.readfile(path)
+      if #lines > 0 then
+        return lines
+      end
+    end
+  end
+  return nil
+end
+
 --- The project segment of an "org/project/repo" string (work-item tags are keyed by it).
 --- @param repo string?
 --- @return string?
@@ -1920,11 +1958,18 @@ function M.create_pr()
               if source == target then
                 return util.msg('azdo: source and target branch are the same', vim.log.levels.WARN)
               end
-              -- Prefill ONLY the title (source branch's tip commit subject); leave the
-              -- description blank so nothing is auto-dumped into it.
+              -- Prefill the title from the source branch's tip commit subject. The
+              -- description stays empty unless the repo ships a PR template — in
+              -- which case leaving it blank silently skips a checklist reviewers
+              -- expect to see filled in, which is worse than a prefilled buffer.
               local subject = vim.trim((vim.fn.systemlist({ 'git', 'log', '-1', '--format=%s', source })[1]) or
                 '')
               local content = { subject ~= '' and subject or source }
+              local template = M._read_pr_template()
+              if template then
+                table.insert(content, '')
+                vim.list_extend(content, template)
+              end
               local heading = {
                 { ('Create PR: %s → %s'):format(source, target), 'AzdoHeading' },
                 { '  first line = title; rest = description | ZZ to create (ZQ to abort)', 'Comment' },

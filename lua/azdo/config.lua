@@ -41,6 +41,21 @@ M.defaults = {
   --- @type boolean
   create_in_tab = true,
 
+  --- Create pull requests as drafts. On by default: a published PR notifies every
+  --- required reviewer the moment it exists, and again on each push, so a PR you
+  --- are still iterating on burns their attention. Mark it ready in the web UI —
+  --- or with the `edit` mapping — once it actually is.
+  --- @type boolean
+  create_draft = true,
+
+  --- Prefill a new PR's description from the repository's pull-request template
+  --- when one exists. Azure DevOps looks for `pull_request_template.md` in
+  --- `.azuredevops/`, `.vsts/`, `docs/` or the repo root; so does this, in that
+  --- order, plus `.github/` for repos that keep it there. false leaves the
+  --- description empty.
+  --- @type boolean
+  create_template = true,
+
   --- PR-view settings (the `pr` / `prdiff` / `prcomments` buffers).
   --- @class azdo.Config.pr
   pr = {
