@@ -487,21 +487,52 @@ function M.checkout(opts)
       local path = ('%s/%s/pr-%s'):format(main, dir, id)
 
       -- Fetch before adding: the branch is usually remote-only on first review.
-      -- Best-effort — the ref may already be local, and being offline should not
-      -- block reusing what is.
-      util.system({ 'git', 'fetch', '--no-tags', '--quiet', 'origin', branch }, function()
+      -- Best-effort, because the ref may already be local and being offline should
+      -- not block reusing what is — but the stderr is kept, since if we then find
+      -- no usable ref the fetch is the reason and `git worktree add` would only
+      -- say "invalid reference: origin/<branch>".
+      --
+      -- The refspec is explicit rather than a bare `origin <branch>`: that form
+      -- updates the remote-tracking ref only opportunistically, via the configured
+      -- refspec, so on a clone without the usual one it lands in FETCH_HEAD and
+      -- `origin/<branch>` never appears.
+      local fetch = { 'git', 'fetch', '--no-tags', '--quiet', 'origin', ('+%s:refs/remotes/origin/%s'):format(branch, branch) }
+      util.system(fetch, function(_, fetch_err, fetch_code)
         util.system({ 'git', 'rev-parse', '--verify', '--quiet', 'refs/heads/' .. branch }, function(_, _, has_local)
-          -- A local branch is reused as-is; otherwise create one tracking the
-          -- remote. Never `-B`, which would reset a local branch that may carry
-          -- commits of yours.
-          local add = has_local == 0
-              and { 'git', 'worktree', 'add', path, branch }
-              or { 'git', 'worktree', 'add', '--track', '-b', branch, path, 'origin/' .. branch }
-          util.system(add, function(_, stderr, ac)
-            if ac ~= 0 then
-              return util.msg(('azdo: %s'):format(vim.trim(stderr or 'git worktree add failed')), vim.log.levels.ERROR)
+          local function add_worktree()
+            -- A local branch is reused as-is; otherwise create one tracking the
+            -- remote. Never `-B`, which would reset a local branch that may carry
+            -- commits of yours.
+            local add = has_local == 0
+                and { 'git', 'worktree', 'add', path, branch }
+                or { 'git', 'worktree', 'add', '--track', '-b', branch, path, 'origin/' .. branch }
+            util.system(add, function(_, stderr, ac)
+              if ac ~= 0 then
+                return util.msg(('azdo: %s'):format(vim.trim(stderr or 'git worktree add failed')), vim.log.levels.ERROR)
+              end
+              open_in_tab(path, label, show)
+            end)
+          end
+
+          if has_local == 0 then
+            return add_worktree()
+          end
+          -- Nothing local, so the remote-tracking ref is the only possible start
+          -- point. Report the fetch instead of letting git complain about a ref
+          -- that was never going to exist.
+          util.system({ 'git', 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/' .. branch }, function(_, _, has_remote)
+            if has_remote ~= 0 then
+              local why = vim.trim(fetch_err or '')
+              if why == '' then
+                why = fetch_code ~= 0 and ('git fetch exited %d'):format(fetch_code)
+                  or 'the fetch reported success but the ref is missing'
+              end
+              return util.msg(
+                ('azdo: could not fetch %s from origin — %s'):format(branch, why),
+                vim.log.levels.ERROR
+              )
             end
-            open_in_tab(path, label, show)
+            add_worktree()
           end)
         end)
       end)
