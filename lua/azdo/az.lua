@@ -124,19 +124,26 @@ local function with_api(url, extra)
 end
 
 --- Optional Personal Access Token. When set, azdo.nvim authenticates with the PAT (HTTP Basic)
---- instead of `az login`. Source order: the `pat` option, then `$AZDO_PAT`, then `$AZURE_DEVOPS_EXT_PAT`
---- (the var the `az devops` CLI itself reads). The PAT needs the "Code (read & write)" scope, plus
---- "Build (read)" if you use the CI-logs view.
+--- instead of `az login`. The PAT needs the "Code (read & write)" scope, plus "Build (read)" if you
+--- use the CI-logs view.
+---
+--- Only the `pat` option is consulted. The environment is read *solely* when you opt in with
+--- `pat_from_env = true`, and then in the order `$AZDO_PAT`, `$AZURE_DEVOPS_EXT_PAT` (the var the
+--- `az devops` CLI itself reads). Sourcing credentials from the environment by default means a var
+--- set for an unrelated tool silently redirects which identity the editor authenticates as — the
+--- kind of thing you only notice when it has already acted as the wrong one.
 --- @return string?
 local function get_pat()
   local p = config.pat()
   if p then
     return p
   end
-  for _, name in ipairs({ 'AZDO_PAT', 'AZURE_DEVOPS_EXT_PAT' }) do
-    local e = vim.env[name]
-    if type(e) == 'string' and e ~= '' then
-      return e
+  if config.options.pat_from_env then
+    for _, name in ipairs({ 'AZDO_PAT', 'AZURE_DEVOPS_EXT_PAT' }) do
+      local e = vim.env[name]
+      if type(e) == 'string' and e ~= '' then
+        return e
+      end
     end
   end
   return nil

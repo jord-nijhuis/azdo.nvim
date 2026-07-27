@@ -60,6 +60,10 @@ check('bare num', pt('42'), { id = 42 })
 check('bare sha', pt('a1b2c3d'), { sha = 'a1b2c3d' })
 check('garbage', pt('???'), nil)
 
+-- Credentials are never sourced from the environment unless explicitly opted in: a var exported for
+-- the `az devops` CLI must not silently decide which identity the editor authenticates as.
+check('pat_from_env defaults off', config.options.pat_from_env, false)
+
 -- get_pr_diff / get_commit shell out to git. Branch names come from whoever opened the PR and git's
 -- ref rules permit `$(…)`, backticks and `|`, so passing them through a shell turns "read a PR's
 -- diff" into arbitrary code execution. These drive the real functions against a throwaway repo and

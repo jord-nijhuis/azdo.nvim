@@ -19,10 +19,16 @@ M.defaults = {
   api_version = '7.1',
 
   --- Personal Access Token. A string, or a function returning one (handy for
-  --- reading it lazily from a keychain). nil = use `az login` / the
-  --- $AZDO_PAT / $AZURE_DEVOPS_EXT_PAT env vars.
+  --- reading it lazily from a keychain). nil = use `az login`.
   --- @type string|fun():string?|nil
   pat = nil,
+
+  --- Fall back to `$AZDO_PAT` / `$AZURE_DEVOPS_EXT_PAT` when `pat` is unset.
+  --- Off by default: `AZURE_DEVOPS_EXT_PAT` belongs to the `az devops` CLI, and
+  --- picking it up implicitly means a var exported for an unrelated tool decides
+  --- which identity the editor authenticates as, silently overriding `az login`.
+  --- @type boolean
+  pat_from_env = false,
 
   --- Default project "org/project" (or just "project" on-prem) used by
   --- `:Azdo items` when you're not inside an Azure DevOps clone.
