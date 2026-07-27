@@ -28,6 +28,16 @@ check('remote https .git', az.parse_remote('https://dev.azure.com/myorg/MyProj/_
 check('remote org@host', az.parse_remote('https://myorg@dev.azure.com/myorg/MyProj/_git/myrepo'), 'myorg/MyProj/myrepo')
 check('remote ssh', az.parse_remote('git@ssh.dev.azure.com:v3/myorg/MyProj/myrepo'), 'myorg/MyProj/myrepo')
 check('remote visualstudio.com', az.parse_remote('https://myorg.visualstudio.com/MyProj/_git/myrepo'), 'myorg/MyProj/myrepo')
+check(
+  'remote legacy ssh',
+  az.parse_remote('myorg@vs-ssh.visualstudio.com:v3/myorg/MyProj/myrepo'),
+  'myorg/MyProj/myrepo'
+)
+check(
+  'remote legacy ssh .git',
+  az.parse_remote('myorg@vs-ssh.visualstudio.com:v3/myorg/MyProj/myrepo.git'),
+  'myorg/MyProj/myrepo'
+)
 check('remote non-azure', az.parse_remote('https://github.com/owner/repo'), nil)
 
 -- parse_remote: on-prem Azure DevOps Server (base_url configured). org token = collection name.

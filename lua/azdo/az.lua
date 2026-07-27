@@ -309,6 +309,13 @@ function M.parse_remote(url)
   if org then
     return f('%s/%s/%s', org, project, name)
   end
+  -- legacy ssh: org@vs-ssh.visualstudio.com:v3/org/project/repo. Orgs created before the
+  -- dev.azure.com rename still hand this form out. The org token is all that's needed —
+  -- collection_base builds https://dev.azure.com/<org>, which serves legacy-named orgs too.
+  org, project, name = url:match('vs%-ssh%.visualstudio%.com:v3/([^/]+)/([^/]+)/(.+)$')
+  if org then
+    return f('%s/%s/%s', org, project, name)
+  end
   return nil
 end
 
