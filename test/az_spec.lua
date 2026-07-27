@@ -70,6 +70,14 @@ check('bare num', pt('42'), { id = 42 })
 check('bare sha', pt('a1b2c3d'), { sha = 'a1b2c3d' })
 check('garbage', pt('???'), nil)
 
+-- Pipeline folders: Azure DevOps stores the path Windows-style, and the folder is what distinguishes
+-- same-named pipelines ("CI", "PR Review") across repos in one project.
+check('pipeline folder root', az.pipeline_folder('\\'), '')
+check('pipeline folder empty', az.pipeline_folder(nil), '')
+check('pipeline folder flat', az.pipeline_folder('\\Backend'), 'Backend')
+check('pipeline folder nested', az.pipeline_folder('\\Devops\\Nightly'), 'Devops/Nightly')
+check('pipeline folder trailing', az.pipeline_folder('\\Backend\\'), 'Backend')
+
 --- Runs `fn` with the cwd inside a throwaway git repo, then cleans up.
 local function in_temp_repo(fn)
   local dir = vim.fn.tempname()

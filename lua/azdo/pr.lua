@@ -2053,6 +2053,55 @@ function M.link_workitem()
 end
 
 --- Shows a menu of CI (pipeline) logs for the PR.
+--- Queues a pipeline against the current PR's source branch.
+---
+--- Azure DevOps does not run PR-triggered pipelines on draft PRs, so the branch
+--- has to be built explicitly — the gap this fills. Pairs with `show_ci_logs`:
+--- queue here, read the result there, without leaving the PR.
+--- @param opts table?
+function M.queue_pipeline(opts)
+  local _, id, repo = resolve_pr(opts)
+  az.get_pr_data(id, repo, nil, function(pr)
+    if not pr then
+      return util.msg(('PR #%s not found'):format(id), vim.log.levels.ERROR)
+    end
+    local branch = pr.headRefName
+    if not branch or branch == '' then
+      return util.msg(('PR #%s has no source branch'):format(id), vim.log.levels.ERROR)
+    end
+    az.list_pipelines(repo, function(pipelines, err)
+      if not pipelines then
+        return util.msg(('failed to list pipelines: %s'):format(err or ''), vim.log.levels.ERROR)
+      end
+      if #pipelines == 0 then
+        return util.msg('No enabled pipelines for this repo', vim.log.levels.WARN)
+      end
+      vim.schedule(function()
+        vim.ui.select(pipelines, {
+          prompt = ('Queue for %s:'):format(branch),
+          -- Folder first: several repos share the pipeline names ("CI",
+          -- "PR Review"), so the folder is what tells them apart.
+          format_item = function(p)
+            return p.folder ~= '' and ('%s / %s'):format(p.folder, p.name) or p.name
+          end,
+        }, function(picked)
+          if not picked then
+            return
+          end
+          local done = util.progress(('Queueing %s for %s…'):format(picked.name, branch))
+          az.queue_pipeline(repo, picked.id, branch, function(build, qerr)
+            done(build and 'success' or 'failed')
+            if not build then
+              return util.msg(('Queue failed: %s'):format(vim.trim(qerr or '')), vim.log.levels.ERROR)
+            end
+            util.msg(('Queued %s #%s — %s'):format(picked.name, build.number, build.url))
+          end)
+        end)
+      end)
+    end)
+  end)
+end
+
 function M.show_ci_logs(opts)
   local _, id, repo = resolve_pr(opts)
   az.get_pr_data(id, repo, nil, function(pr)

@@ -303,6 +303,11 @@ local KEYMAP_SPEC = {
   -- "Global" (buffer-relative) UPDATE actions:
   { name = 'comment_overview', plug = '<Plug>(azdo-comment-overview)', desc = 'Comment on PR/issue overview' },
   { name = 'merge', plug = '<Plug>(azdo-merge)', desc = 'Merge PR' },
+  {
+    name = 'pipeline',
+    plug = '<Plug>(azdo-pipeline)',
+    desc = "Queue a pipeline for this PR's source branch",
+  },
   { name = 'review', plug = '<Plug>(azdo-review)', desc = 'Review PR (approve/request-changes/comment)' },
   {
     name = 'edit',

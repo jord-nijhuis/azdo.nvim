@@ -162,6 +162,7 @@ M.defaults = {
     refresh = 'R',
     diff_toggle = 'dd',
     logs = 'dl',
+    pipeline = 'dp',
     next_commit = ']f',
     prev_commit = '[f',
     web = 'gw',

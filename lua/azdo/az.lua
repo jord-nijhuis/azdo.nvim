@@ -1069,6 +1069,97 @@ end
 -- CI / Pipelines
 ---------------------------------------------------------------------------
 
+--- Human-facing web url for a build.
+local function build_web_url(repo, build_id)
+  local org, project = parse_repo(repo)
+  return f('%s/%s/_build/results?buildId=%s', collection_base(org), urlencode(project), build_id)
+end
+
+--- Renders a build definition's `path` as a display folder.
+---
+--- Azure DevOps stores it Windows-style — `\` for the root, `\Backend`,
+--- `\Devops\Nightly` — which is noise in a picker. Returns "" for the root, so a
+--- caller can omit the prefix entirely rather than printing a bare separator.
+--- Exposed for tests.
+--- @param path string?
+--- @return string
+function M.pipeline_folder(path)
+  local p = (path or ''):gsub('\\', '/'):gsub('^/+', ''):gsub('/+$', '')
+  return p
+end
+
+--- Lists the build definitions attached to this repo, grouped by folder.
+---
+--- Filtered by repository rather than listing the whole project: an org with
+--- several repos has one "CI" and one "PR Review" per repo, so an unfiltered list
+--- is several identically-named entries with nothing to choose between them. The
+--- list representation omits `repository`, so the filter has to be server-side —
+--- hence resolving the repo's id first.
+---
+--- @param repo string "org/project/repo"
+--- @param cb fun(pipelines?: { id: integer, name: string, folder: string }[], error?: string)
+function M.list_pipelines(repo, cb)
+  local rbase = repo_base(repo)
+  if not rbase then
+    return cb(nil, 'invalid repo')
+  end
+  az_rest('get', with_api(rbase), nil, function(git_repo, stderr, code)
+    if code ~= 0 or not git_repo or not git_repo.id then
+      return cb(nil, stderr ~= '' and stderr or 'could not resolve the repository id')
+    end
+    local url = with_api(
+      f('%s/build/definitions', project_base(repo)),
+      f('repositoryId=%s&repositoryType=TfsGit', urlencode(git_repo.id))
+    )
+    az_rest('get', url, nil, function(resp, err, rc)
+      if rc ~= 0 or not resp then
+        return cb(nil, err ~= '' and err or 'could not list pipelines')
+      end
+      local out = {}
+      for _, d in ipairs(resp.value or {}) do
+        -- A disabled or paused definition will reject the queue request, so don't
+        -- offer it as a choice.
+        if (d.queueStatus or 'enabled') == 'enabled' then
+          out[#out + 1] = { id = d.id, name = d.name, folder = M.pipeline_folder(d.path) }
+        end
+      end
+      -- Grouped by folder, then by name: pipelines are named per-purpose ("CI",
+      -- "PR Review") and disambiguated by the folder they sit in.
+      table.sort(out, function(a, b)
+        if a.folder ~= b.folder then
+          return a.folder:lower() < b.folder:lower()
+        end
+        return a.name:lower() < b.name:lower()
+      end)
+      cb(out)
+    end)
+  end)
+end
+
+--- Queues a build of `definition_id` against `branch`.
+---
+--- @param repo string "org/project/repo"
+--- @param definition_id integer
+--- @param branch string branch name, with or without a `refs/heads/` prefix
+--- @param cb fun(build?: { id: integer, number: string, url: string }, error?: string)
+function M.queue_pipeline(repo, definition_id, branch, cb)
+  vim.validate('definition_id', definition_id, 'number')
+  vim.validate('branch', branch, 'string')
+  local ref = branch:match('^refs/') and branch or ('refs/heads/' .. branch)
+  local body = { definition = { id = definition_id }, sourceBranch = ref }
+  az_rest('post', with_api(f('%s/build/builds', project_base(repo))), body, function(resp, stderr, code)
+    if code ~= 0 or not resp or not resp.id then
+      return cb(nil, stderr ~= '' and stderr or 'failed to queue the build')
+    end
+    cb({
+      id = resp.id,
+      number = resp.buildNumber or tostring(resp.id),
+      -- `_links.web.href` comes back null on this endpoint, so build it.
+      url = build_web_url(repo, resp.id),
+    })
+  end)
+end
+
 --- Lists pipeline-build jobs for the latest build on the PR's merge ref.
 --- `databaseId` encodes `buildId * MULT + logId` for `get_pr_ci_logs`.
 ---
