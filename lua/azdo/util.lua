@@ -334,6 +334,12 @@ local KEYMAP_SPEC = {
   { name = 'comment_update', plug = '<Plug>(azdo-comment-update)', desc = 'Update/edit a comment' },
   { name = 'open', plug = '<Plug>(azdo-open)', desc = 'Open :Azdo target at cursor' },
   { name = 'open_split', plug = '<Plug>(azdo-open-split)', desc = 'Open :Azdo target at cursor in a split' },
+  { name = 'open_tab', plug = '<Plug>(azdo-open-tab)', desc = 'Open :Azdo target at cursor in a new tab' },
+  {
+    name = 'checkout',
+    plug = '<Plug>(azdo-checkout)',
+    desc = "Check out this PR's branch in a worktree, in a new tab",
+  },
 
   -- Comment-thread navigation: only useful in the diff + comments panes, where
   -- threads are anchored. (Both panes are line-aligned, so this works in either.)

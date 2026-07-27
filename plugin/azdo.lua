@@ -133,6 +133,17 @@ vim.keymap.set('n', '<Plug>(azdo-open-split)', function()
     vim.cmd((vertical and 'vertical resize ' or 'resize ') .. math.floor(total * size / 100 + 0.5))
   end
 end, opts)
+vim.keymap.set('n', '<Plug>(azdo-open-tab)', function()
+  -- `mods.tab` is the tab to open *after*, which is what `:tab <cmd>` sets it to;
+  -- -1 (the default) means "no tab modifier" and would open in place.
+  vim.api.nvim_cmd(
+    { cmd = 'Azdo', args = { vim.fn.expand('<cWORD>') }, mods = { tab = vim.fn.tabpagenr() } },
+    {}
+  )
+end, opts)
+vim.keymap.set('n', '<Plug>(azdo-checkout)', function()
+  require('azdo.pr').checkout()
+end, opts)
 vim.keymap.set('n', '<Plug>(azdo-next-commit)', function()
   require('azdo.pr').show_next_commit(1)
 end, opts)

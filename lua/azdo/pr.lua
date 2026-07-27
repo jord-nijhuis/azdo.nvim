@@ -394,6 +394,121 @@ function M.refresh()
   M.select({ args = vim.api.nvim_buf_get_name(0) })
 end
 
+--- Parses `git worktree list --porcelain` into `{ path, branch }` entries. The
+--- first entry is always the main worktree. Blocks are separated by a blank line:
+--- `worktree <path>`, `HEAD <sha>`, then `branch refs/heads/<name>` or `detached`.
+--- Exposed for tests.
+--- @param porcelain string
+--- @return { path: string, branch: string? }[]
+function M._parse_worktrees(porcelain)
+  local out = {}
+  for block in vim.gsplit(vim.trim(porcelain), '\n\n', { plain = true }) do
+    local path = block:match('worktree ([^\n]+)')
+    if path then
+      out[#out + 1] = { path = path, branch = block:match('branch refs/heads/([^\n]+)') }
+    end
+  end
+  return out
+end
+
+--- Opens `path` in a tab, or switches to the tab already sitting there.
+---
+--- Per-tab cwd (`:tcd`), so pickers, grep and git in that tab all scope to the
+--- worktree while the tab you came from keeps its own directory. Resolves both
+--- sides before comparing, since a worktree path may run through a symlink.
+--- @param after fun()? run once the tab is the current one
+local function open_in_tab(path, label, after)
+  local target = vim.fn.resolve(path)
+  for _, handle in ipairs(vim.api.nvim_list_tabpages()) do
+    local nr = vim.api.nvim_tabpage_get_number(handle)
+    if vim.fn.resolve(vim.fn.getcwd(-1, nr)) == target then
+      vim.api.nvim_set_current_tabpage(handle)
+      util.msg(('%s: already open in tab %d'):format(label, nr))
+      if after then
+        after()
+      end
+      return
+    end
+  end
+  vim.cmd.tabnew()
+  vim.cmd.tcd(vim.fn.fnameescape(path))
+  util.msg(('%s: %s'):format(label, vim.fn.fnamemodify(path, ':~')))
+  if after then
+    after()
+  end
+end
+
+--- Checks out the current PR's source branch in its own worktree, in a new tab.
+---
+--- A worktree rather than `git switch`: reviewing someone's PR while your own work
+--- is in progress is the normal case, and moving the shared checkout out from under
+--- yourself to read a diff is the wrong trade. It also means the PR's diff renders,
+--- since `get_pr_diff` needs a clone of the PR's own repo.
+---
+--- Idempotent in both directions — an existing worktree for the branch is reused
+--- wherever it lives, and a tab already sitting in it is switched to rather than
+--- duplicated.
+function M.checkout(opts)
+  local _, id, repo = resolve_pr(opts)
+  az.get_pr_data(id, repo, nil, function(pr)
+    if not pr then
+      return util.msg(('PR #%s not found'):format(id), vim.log.levels.ERROR)
+    end
+    local branch = pr.headRefName
+    if not branch or branch == '' then
+      return util.msg(('PR #%s has no source branch'):format(id), vim.log.levels.ERROR)
+    end
+    local label = ('PR #%s'):format(id)
+
+    util.system({ 'git', 'worktree', 'list', '--porcelain' }, function(listed, _, code)
+      if code ~= 0 then
+        return util.msg('azdo: not inside a git repository', vim.log.levels.ERROR)
+      end
+      local trees = M._parse_worktrees(listed)
+      -- Already checked out somewhere? Go there; a branch cannot be checked out in
+      -- two worktrees anyway, so creating a second is not an option.
+      -- The tab shows the PR too, so it is self-contained: correct cwd for the
+      -- local diff, and `dd` / `co` still resolve a PR from inside it.
+      local function show()
+        M.show_pr(id, repo, true)
+      end
+
+      for _, t in ipairs(trees) do
+        if t.branch == branch then
+          return open_in_tab(t.path, label, show)
+        end
+      end
+
+      local main = trees[1] and trees[1].path
+      if not main then
+        return util.msg('azdo: could not locate the main worktree', vim.log.levels.ERROR)
+      end
+      local dir = (config.options.checkout or {}).dir or '.claude/worktrees'
+      local path = ('%s/%s/pr-%s'):format(main, dir, id)
+
+      -- Fetch before adding: the branch is usually remote-only on first review.
+      -- Best-effort — the ref may already be local, and being offline should not
+      -- block reusing what is.
+      util.system({ 'git', 'fetch', '--no-tags', '--quiet', 'origin', branch }, function()
+        util.system({ 'git', 'rev-parse', '--verify', '--quiet', 'refs/heads/' .. branch }, function(_, _, has_local)
+          -- A local branch is reused as-is; otherwise create one tracking the
+          -- remote. Never `-B`, which would reset a local branch that may carry
+          -- commits of yours.
+          local add = has_local == 0
+              and { 'git', 'worktree', 'add', path, branch }
+              or { 'git', 'worktree', 'add', '--track', '-b', branch, path, 'origin/' .. branch }
+          util.system(add, function(_, stderr, ac)
+            if ac ~= 0 then
+              return util.msg(('azdo: %s'):format(vim.trim(stderr or 'git worktree add failed')), vim.log.levels.ERROR)
+            end
+            open_in_tab(path, label, show)
+          end)
+        end)
+      end)
+    end)
+  end)
+end
+
 --- Performs the "merge PR" (complete) action.
 function M.merge_pr()
   local _, id, repo = resolve_pr()

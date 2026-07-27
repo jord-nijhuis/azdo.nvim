@@ -90,6 +90,28 @@ check(
 -- A single word longer than the limit has no boundary to fall back to, so it is cut hard.
 check('branch hard-cuts one long word', bn(4, 'Bug', ('x'):rep(60)), 'fix/4-' .. ('x'):rep(40))
 
+-- Worktree porcelain: `checkout` reuses an existing worktree for the PR's branch rather than failing
+-- to create a second one, so mis-parsing this silently breaks reuse. The first entry is the main
+-- worktree; a detached entry has no branch line.
+local pw = require('azdo.pr')._parse_worktrees
+check('worktrees: main only', pw('worktree /repo\nHEAD abc\nbranch refs/heads/main\n'), {
+  { path = '/repo', branch = 'main' },
+})
+check(
+  'worktrees: linked + detached',
+  pw(
+    'worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n'
+      .. 'worktree /repo/.claude/worktrees/pr-42\nHEAD def\nbranch refs/heads/feature/their-work\n\n'
+      .. 'worktree /repo/.claude/worktrees/pr-9\nHEAD 123\ndetached\n'
+  ),
+  {
+    { path = '/repo', branch = 'main' },
+    { path = '/repo/.claude/worktrees/pr-42', branch = 'feature/their-work' },
+    { path = '/repo/.claude/worktrees/pr-9' },
+  }
+)
+check('worktrees: empty', pw(''), {})
+
 -- Pipeline folders: Azure DevOps stores the path Windows-style, and the folder is what distinguishes
 -- same-named pipelines ("CI", "PR Review") across repos in one project.
 check('pipeline folder root', az.pipeline_folder('\\'), '')

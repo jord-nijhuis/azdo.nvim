@@ -48,6 +48,18 @@ M.defaults = {
   --- @type boolean
   create_draft = true,
 
+  --- Where `checkout` puts a PR's worktree, relative to the main worktree's root.
+  --- The default matches what `claude -w` already uses, so the two share a
+  --- directory and `git worktree list` stays coherent — and, importantly, a path
+  --- under `.claude/worktrees/` is one people commonly already git-ignore. Point
+  --- this somewhere else and check that it *is* ignored, or every worktree shows up
+  --- as untracked noise.
+  --- @class azdo.Config.checkout
+  checkout = {
+    --- @type string
+    dir = '.claude/worktrees',
+  },
+
   --- Prefill a new PR's description from the repository's pull-request template
   --- when one exists. Azure DevOps looks for `pull_request_template.md` in
   --- `.azuredevops/`, `.vsts/`, `docs/` or the repo root; so does this, in that
@@ -179,6 +191,8 @@ M.defaults = {
     comment_update = 'cu',
     open = '<CR>',
     open_split = '<C-W><CR>',
+    open_tab = '<C-W>t',
+    checkout = 'co',
     next_comment = ']c',
     prev_comment = '[c',
     tag_toggle = 't',
