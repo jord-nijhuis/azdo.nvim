@@ -370,6 +370,12 @@ local KEYMAP_SPEC = {
     feats = { workitems = true, issue = true },
   },
   {
+    name = 'start_branch',
+    plug = '<Plug>(azdo-start-branch)',
+    desc = 'Create and check out a branch for the work item under the cursor',
+    feats = { workitems = true, issue = true },
+  },
+  {
     name = 'toggle_hidden',
     plug = '<Plug>(azdo-toggle-hidden)',
     desc = 'Show/hide the dashboard\'s hidden states (items.hide_states)',

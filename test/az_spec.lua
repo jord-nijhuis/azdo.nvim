@@ -70,6 +70,26 @@ check('bare num', pt('42'), { id = 42 })
 check('bare sha', pt('a1b2c3d'), { sha = 'a1b2c3d' })
 check('garbage', pt('???'), nil)
 
+-- Branch names from work items: "<type>/<id>-<slug>". Bug maps to fix, Task to chore, and every
+-- backlog type to feat; the slug is cut at a word boundary so the tail doesn't read as a typo.
+local bn = require('azdo.pr')._branch_name
+check('branch pbi', bn(11, 'Product Backlog Item', 'User auth'), 'feat/11-user-auth')
+check('branch bug', bn(123, 'Bug', 'Login redirect fails'), 'fix/123-login-redirect-fails')
+check('branch task', bn(7, 'Task', 'Bump deps'), 'chore/7-bump-deps')
+check('branch feature', bn(9, 'Feature', 'Prometheus metrics'), 'feat/9-prometheus-metrics')
+check('branch unknown type', bn(1, 'Epic', 'Big thing'), 'feat/1-big-thing')
+check('branch punctuation', bn(5, 'Bug', "Don't crash on `null` (again)!"), 'fix/5-dont-crash-on-null-again')
+check('branch no title', bn(42, 'Bug', ''), 'fix/42')
+-- 37 chars of slug: "forty" would push it past the 40-char limit, so the whole word is dropped
+-- rather than cut mid-word.
+check(
+  'branch truncates on a word boundary',
+  bn(3, 'Bug', 'this title is quite a lot longer than forty characters in total'),
+  'fix/3-this-title-is-quite-a-lot-longer-than'
+)
+-- A single word longer than the limit has no boundary to fall back to, so it is cut hard.
+check('branch hard-cuts one long word', bn(4, 'Bug', ('x'):rep(60)), 'fix/4-' .. ('x'):rep(40))
+
 -- Pipeline folders: Azure DevOps stores the path Windows-style, and the folder is what distinguishes
 -- same-named pipelines ("CI", "PR Review") across repos in one project.
 check('pipeline folder root', az.pipeline_folder('\\'), '')

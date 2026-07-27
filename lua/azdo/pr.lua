@@ -57,6 +57,45 @@ local function resolve_local_repo()
   return repo
 end
 
+--- Conventional-commit type for a work-item type, used to seed a branch name.
+---
+--- Only Bug maps to something other than `feat`: the Scrum/Agile backlog types
+--- (Product Backlog Item, User Story, Feature, Epic) all describe new behaviour,
+--- and Task is deliberately `chore` rather than guessing from its parent. This is
+--- only a default — the branch name is editable before anything is created.
+local WORKITEM_BRANCH_TYPE = {
+  ['Bug'] = 'fix',
+  ['Issue'] = 'fix',
+  ['Task'] = 'chore',
+}
+
+--- Builds a `<type>/<id>-<slug>` branch name from a work item.
+---
+--- The slug is cut at a word boundary rather than mid-word, because the tail of a
+--- branch name is read by humans in `git branch` output and a truncated word
+--- reads as a typo. Exposed for tests.
+--- @param id integer
+--- @param wtype string? work-item type ("Bug", "Product Backlog Item", …)
+--- @param title string?
+--- @return string
+function M._branch_name(id, wtype, title)
+  local kind = WORKITEM_BRANCH_TYPE[wtype or ''] or 'feat'
+  local slug = (title or ''):lower():gsub("['\"]", ''):gsub('[^%w]+', '-'):gsub('^%-+', ''):gsub('%-+$', '')
+  local LIMIT = 40
+  if #slug > LIMIT then
+    local cut = slug:sub(1, LIMIT + 1)
+    -- Drop back to the last separator so the final word stays whole; if the first
+    -- word alone is longer than the limit, a hard cut is the only option.
+    local at = cut:match('^(.*)%-[^%-]*$')
+    slug = (at and at ~= '' and at) or slug:sub(1, LIMIT)
+    slug = slug:gsub('%-+$', '')
+  end
+  if slug == '' then
+    return ('%s/%d'):format(kind, id)
+  end
+  return ('%s/%d-%s'):format(kind, id, slug)
+end
+
 --- Azure DevOps' search order for a repo's default pull-request template, plus
 --- `.github/` for repos that keep it there. Azure DevOps also supports a
 --- `pull_request_template/` *directory* of named templates; picking between those
@@ -1237,6 +1276,79 @@ end
 --- under the cursor; in a work-item view, on that item. Mapped to `cc` by default
 --- (where commenting has no meaning), mirroring the Azure board's drag-between-
 --- columns. Reflects the change in place — a later `R` pulls fresh.
+--- Creates and checks out a branch for the work item under the cursor.
+---
+--- Cut from the remote default branch rather than HEAD: picking up a second item
+--- while still on the first one's branch is the common case, and silently stacking
+--- them is a mess to unpick later. Both the base and the generated name are shown
+--- in an editable prompt, so neither is imposed.
+function M.start_branch()
+  local buf = vim.api.nvim_get_current_buf()
+  local b = vim.b.azdo or {}
+  local repo = b.repo
+
+  --- Prompts for the name, then creates the branch.
+  local function create(id, wtype, title)
+    util.system({ 'git', 'rev-parse', '--is-inside-work-tree' }, function(_, _, code)
+      if code ~= 0 then
+        return util.msg('azdo: not inside a git work tree', vim.log.levels.ERROR)
+      end
+      util.system({ 'git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD' }, function(head, _, hc)
+        local base = (hc == 0 and vim.trim(head) ~= '' and vim.trim(head)) or 'origin/main'
+        vim.schedule(function()
+          local name = vim.trim(vim.fn.input({
+            prompt = ('Branch (from %s): '):format(base),
+            default = M._branch_name(id, wtype, title),
+          }))
+          if name == '' then
+            return util.msg('azdo: aborted (no branch name)')
+          end
+          -- --no-track: this is not a branch that follows the default branch, and
+          -- tracking would point `git push` at it.
+          util.system({ 'git', 'switch', '--no-track', '-c', name, base }, function(_, stderr, sc)
+            if sc ~= 0 then
+              return util.msg(('azdo: %s'):format(vim.trim(stderr or 'git switch failed')), vim.log.levels.ERROR)
+            end
+            util.msg(('On %s (from %s) for #%d'):format(name, base, id))
+          end)
+        end)
+      end)
+    end)
+  end
+
+  if b.feat == 'workitems' then
+    local id = tonumber(vim.api.nvim_get_current_line():match('#(%d+)'))
+    if not id then
+      return util.msg('azdo: put the cursor on a #id line to start a branch')
+    end
+    local cached = wi_cache[buf]
+    for _, list in ipairs({ cached and cached.items or {}, cached and cached.tagged or {} }) do
+      for _, wi in ipairs(list) do
+        if wi.id == id then
+          return create(id, wi.type, wi.title)
+        end
+      end
+    end
+    -- The dashboard is the only source of type/title here; without it the name
+    -- would silently lose its slug, so refuse rather than generate a worse one.
+    return util.msg(('azdo: #%d is not in the loaded dashboard — refresh with R'):format(id), vim.log.levels.WARN)
+  elseif b.feat == 'issue' then
+    local id = tonumber(b.id)
+    if not id or not repo then
+      return util.msg('azdo: no work item here', vim.log.levels.WARN)
+    end
+    -- A single-item buffer holds no type/title, so fetch them.
+    return az.get_workitem(repo, id, function(wi, err)
+      if not wi then
+        return util.msg(('azdo: could not load #%d: %s'):format(id, err or ''), vim.log.levels.ERROR)
+      end
+      local fields = wi.fields or {}
+      create(id, fields['System.WorkItemType'], fields['System.Title'])
+    end)
+  end
+  return util.msg('azdo: start-branch is only available on work items', vim.log.levels.WARN)
+end
+
 function M.set_state()
   local buf = vim.api.nvim_get_current_buf()
   local b = vim.b.azdo or {}

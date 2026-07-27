@@ -184,6 +184,7 @@ M.defaults = {
     tag_toggle = 't',
     sort = 's',
     set_state = 'cc',
+    start_branch = 'cb',
     toggle_hidden = 'gh',
     assignee = 'ga',
   },
