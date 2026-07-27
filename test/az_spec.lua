@@ -60,6 +60,55 @@ check('bare num', pt('42'), { id = 42 })
 check('bare sha', pt('a1b2c3d'), { sha = 'a1b2c3d' })
 check('garbage', pt('???'), nil)
 
+-- get_pr_diff / get_commit shell out to git. Branch names come from whoever opened the PR and git's
+-- ref rules permit `$(…)`, backticks and `|`, so passing them through a shell turns "read a PR's
+-- diff" into arbitrary code execution. These drive the real functions against a throwaway repo and
+-- assert the payload did not run.
+local function in_temp_repo(fn)
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, 'p')
+  local cwd = vim.uv.cwd()
+  vim.uv.chdir(dir)
+  vim.system({ 'git', 'init', '-q', '.' }):wait()
+  vim.system({ 'git', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'i' }):wait()
+  local ok, err = pcall(fn, dir)
+  vim.uv.chdir(cwd)
+  vim.fn.delete(dir, 'rf')
+  if not ok then
+    error(err)
+  end
+end
+
+in_temp_repo(function(dir)
+  local marker = dir .. '/pwned'
+  local done = false
+  az.get_pr_diff('o/p/r', {
+    number = 1,
+    headRefName = 'feature/x$(touch ' .. marker .. ')',
+    baseRefName = 'main',
+    baseRefOid = 'HEAD',
+    headRefOid = 'HEAD',
+  }, function()
+    done = true
+  end)
+  vim.wait(15000, function()
+    return done
+  end, 50)
+  check('get_pr_diff does not execute branch names', vim.uv.fs_stat(marker) ~= nil, false)
+end)
+
+in_temp_repo(function(dir)
+  local marker = dir .. '/pwned'
+  local done = false
+  az.get_commit('o/p/r', 'HEAD$(touch ' .. marker .. ')', function()
+    done = true
+  end)
+  vim.wait(15000, function()
+    return done
+  end, 50)
+  check('get_commit does not execute the sha', vim.uv.fs_stat(marker) ~= nil, false)
+end)
+
 if n_fail > 0 then
   io.write(('\n%d test(s) FAILED\n'):format(n_fail))
   os.exit(1)

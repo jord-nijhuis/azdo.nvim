@@ -766,28 +766,45 @@ end
 --- @param cb fun(diff?: string, err?: string)
 function M.get_pr_diff(repo, pr, cb)
   local id = pr.number
-  -- Fetch the PR merge ref + both branch tips so the commits are present locally, then 3-dot diff.
-  local script = table.concat({
-    f('git fetch --no-tags --quiet origin "refs/pull/%s/merge" "%s" "%s" 2>/dev/null', id, pr.headRefName, pr.baseRefName),
-    f('git diff --no-color "%s...%s"', pr.baseRefOid or 'HEAD', pr.headRefOid or 'HEAD'),
-  }, '; ')
-  util.system({ 'sh', '-c', script }, function(stdout, stderr, code)
-    if code ~= 0 or vim.trim(stdout or '') == '' then
-      return cb(nil, vim.trim(stderr or 'git diff failed (is the cwd a local clone of the PR repo?)'))
-    end
-    cb(stdout)
+  -- argv, never `sh -c`: branch names come from the PR author and are only
+  -- constrained by git's ref rules, which permit `$(…)`, backticks and `|`. Run
+  -- through a shell and reading a hostile PR's diff would execute it.
+  local fetch = {
+    'git',
+    'fetch',
+    '--no-tags',
+    '--quiet',
+    'origin',
+    f('refs/pull/%s/merge', id),
+    pr.headRefName,
+    pr.baseRefName,
+  }
+  -- The fetch is best-effort — the refs are often already local, and a failure
+  -- here (deleted source branch, no network) still leaves a diffable pair. So the
+  -- diff runs regardless, exactly as the old `;`-joined script did.
+  util.system(fetch, function()
+    local diff = { 'git', 'diff', '--no-color', f('%s...%s', pr.baseRefOid or 'HEAD', pr.headRefOid or 'HEAD') }
+    util.system(diff, function(stdout, stderr, code)
+      if code ~= 0 or vim.trim(stdout or '') == '' then
+        return cb(nil, vim.trim(stderr or 'git diff failed (is the cwd a local clone of the PR repo?)'))
+      end
+      cb(stdout)
+    end)
   end)
 end
 
 --- Shows a commit as a patch (via local `git show`).
 --- @param cb fun(patch?: string, err?: string)
 function M.get_commit(repo, sha, cb)
-  local script = f('git fetch --no-tags --quiet origin "%s" 2>/dev/null; git show --no-color "%s"', sha, sha)
-  util.system({ 'sh', '-c', script }, function(stdout, stderr, code)
-    if code ~= 0 or vim.trim(stdout or '') == '' then
-      return cb(nil, vim.trim(stderr or 'git show failed'))
-    end
-    cb(stdout)
+  -- argv, never `sh -c` — see get_pr_diff. `sha` reaches here from :Azdo arguments
+  -- and from API payloads, so it is not guaranteed to be bare hex.
+  util.system({ 'git', 'fetch', '--no-tags', '--quiet', 'origin', sha }, function()
+    util.system({ 'git', 'show', '--no-color', sha }, function(stdout, stderr, code)
+      if code ~= 0 or vim.trim(stdout or '') == '' then
+        return cb(nil, vim.trim(stderr or 'git show failed'))
+      end
+      cb(stdout)
+    end)
   end)
 end
 
