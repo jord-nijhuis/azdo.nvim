@@ -411,44 +411,61 @@ function M._parse_worktrees(porcelain)
   return out
 end
 
---- Drops this PR's buffers from `tab` — the tab `co` was pressed from.
+--- Wipes this PR's rendered buffers, wherever they are.
 ---
---- The checkout tab renders the PR itself, so whatever is left behind is a
---- duplicate that `state.get_buf` would otherwise keep reusing, pulling you back
---- to the old tab. Closing the window is enough to drop the buffer: every azdo
---- buffer sets 'bufhidden' to "wipe".
+--- `state.get_buf` keys buffers by feat+id and hands the same one back forever, so
+--- a stale copy left over from a previous view is not just clutter: `show_pr`
+--- navigates to whichever tab already displays it, which is how a checkout ends up
+--- looking like it did nothing. Wiping is what actually drops them — only the two
+--- transient `acwrite` editors set 'bufhidden' to "wipe", so closing a window
+--- leaves the rest hidden-but-listed. `get_buf` re-creates on demand, so nothing
+--- here needs to unregister.
 ---
---- Only this PR is touched — other PRs and the `:Azdo` list stay, so the tab
---- remains somewhere to come back to and pick the next one. The tab itself is
---- never closed: if these windows are all it has, the last one gets an empty
---- buffer instead, since closing a tab out from under someone reviewing is a
---- worse surprise than an empty window.
+--- Restricted to the three rendered feats, which are all cheap to rebuild: the PR
+--- refetches, the diff comes from local git, the comments refetch. Draft buffers
+--- (`comment`, `edit`, `review`, `merge`) are deliberately excluded and 'modified'
+--- is honoured as a second guard — a half-written comment posts on ZZ, and losing
+--- one to a keypress meant for housekeeping would be data loss.
 ---
 --- Exposed for tests.
 ---
---- @param tab integer tabpage handle
 --- @param id integer|string PR number
 --- @param repo string "org/project/repo"
-function M._drop_pr_bufs(tab, id, repo)
-  if not vim.api.nvim_tabpage_is_valid(tab) then
-    return
+function M._wipe_pr_bufs(id, repo)
+  local rendered = { pr = true, prdiff = true, prcomments = true }
+  local targets = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      local b = vim.b[buf].azdo or {}
+      if rendered[b.feat] and tostring(b.id) == tostring(id) and b.repo == repo and not vim.bo[buf].modified then
+        targets[buf] = true
+      end
+    end
   end
-  local stale = { pr = true, prdiff = true, prcomments = true }
-  local wins = vim.api.nvim_tabpage_list_wins(tab)
-  local remaining = #wins
-  for _, win in ipairs(wins) do
-    if vim.api.nvim_win_is_valid(win) then
-      local b = vim.b[vim.api.nvim_win_get_buf(win)].azdo or {}
-      if stale[b.feat] and tostring(b.id) == tostring(id) and b.repo == repo then
+
+  -- Windows first. Deleting a buffer closes the windows showing it, and closing a
+  -- tab's last window closes the tab — so a wipe would quietly rearrange the tab
+  -- layout. Splits go, but a tab's final window gets an empty buffer and stays:
+  -- tabs are closed deliberately (see `close_tab_at`), never as a side effect.
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local wins = vim.api.nvim_tabpage_list_wins(tab)
+    local remaining = #wins
+    for _, win in ipairs(wins) do
+      if vim.api.nvim_win_is_valid(win) and targets[vim.api.nvim_win_get_buf(win)] then
         if remaining > 1 then
           if pcall(vim.api.nvim_win_close, win, false) then
             remaining = remaining - 1
           end
         else
-          -- Last window in the tab: keep the tab, drop the buffer.
           pcall(vim.api.nvim_win_set_buf, win, vim.api.nvim_create_buf(true, false))
         end
       end
+    end
+  end
+
+  for buf in pairs(targets) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
     end
   end
 end
@@ -521,7 +538,7 @@ function M.checkout(opts)
         -- render here. Skipped when `co` was pressed from inside the checkout
         -- tab itself — those buffers are the ones we are keeping.
         if from ~= vim.api.nvim_get_current_tabpage() then
-          M._drop_pr_bufs(from, id, repo)
+          M._wipe_pr_bufs(id, repo)
         end
         M.show_pr(id, repo, true)
       end
@@ -587,6 +604,140 @@ function M.checkout(opts)
             end
             add_worktree()
           end)
+        end)
+      end)
+    end)
+  end)
+end
+
+--- Summarises `git status --porcelain` for the "remove anyway?" prompt.
+---
+--- Untracked files are counted separately because they are almost always the
+--- reason a review worktree is unclean — build output, caches, dependency
+--- directories — and are far less alarming than modified tracked files. The
+--- prompt says which, so the choice is an informed one.
+---
+--- Exposed for tests.
+---
+--- @param porcelain string
+--- @return { modified: integer, untracked: integer }
+function M._status_counts(porcelain)
+  local counts = { modified = 0, untracked = 0 }
+  for line in vim.gsplit(porcelain, '\n', { plain = true }) do
+    if line ~= '' then
+      if line:sub(1, 2) == '??' then
+        counts.untracked = counts.untracked + 1
+      else
+        counts.modified = counts.modified + 1
+      end
+    end
+  end
+  return counts
+end
+
+--- Closes the tab whose cwd is `path`, if one is sitting there.
+---
+--- Never the last tab — Neovim cannot close it, and a review ending by emptying
+--- the editor would be a worse surprise than a leftover tab. Resolves both sides,
+--- matching `open_in_tab`, since a worktree path may run through a symlink.
+---
+--- @param path string
+local function close_tab_at(path)
+  if #vim.api.nvim_list_tabpages() < 2 then
+    return
+  end
+  local target = vim.fn.resolve(path)
+  for _, handle in ipairs(vim.api.nvim_list_tabpages()) do
+    local nr = vim.api.nvim_tabpage_get_number(handle)
+    if vim.fn.resolve(vim.fn.getcwd(-1, nr)) == target then
+      pcall(vim.api.nvim_exec2, ('tabclose %d'):format(nr), {})
+      return
+    end
+  end
+end
+
+--- Finishes a review: removes the PR's worktree, closes its tab, drops its buffers.
+---
+--- The counterpart to `checkout`. Without it a worktree per reviewed PR accumulates
+--- indefinitely, and because build output lands inside each one they are large —
+--- the disk cost, not the tab, is what actually bites.
+---
+--- Never forces silently. `git worktree remove` refuses anything unclean, which for
+--- a worktree you have built in is the normal case rather than the exception, so an
+--- unclean tree prompts with what is actually there. The branch is left alone: it
+--- may be one you had locally before the review, and deleting someone's branch to
+--- tidy up is not a trade this should make.
+function M.finish()
+  local _, id, repo = resolve_pr()
+  az.get_pr_data(id, repo, nil, function(pr)
+    if not pr then
+      return util.msg(('PR #%s not found'):format(id), vim.log.levels.ERROR)
+    end
+    local branch = pr.headRefName
+    if not branch or branch == '' then
+      return util.msg(('PR #%s has no source branch'):format(id), vim.log.levels.ERROR)
+    end
+
+    util.system({ 'git', 'worktree', 'list', '--porcelain' }, function(listed, _, code)
+      if code ~= 0 then
+        return util.msg('azdo: not inside a git repository', vim.log.levels.ERROR)
+      end
+      local trees = M._parse_worktrees(listed)
+      local main = trees[1] and trees[1].path
+      if not main then
+        return util.msg('azdo: could not locate the main worktree', vim.log.levels.ERROR)
+      end
+
+      local path
+      for i, t in ipairs(trees) do
+        if i > 1 and t.branch == branch then
+          path = t.path
+          break
+        end
+      end
+      if not path then
+        -- Nothing to finish. Still drop the buffers: reviewing without a checkout is
+        -- a normal path, and the request was to be done with this PR either way.
+        M._wipe_pr_bufs(id, repo)
+        return util.msg(('PR #%s: no worktree to remove'):format(id))
+      end
+
+      local function remove(force)
+        local cmd = { 'git', '-C', main, 'worktree', 'remove' }
+        if force then
+          cmd[#cmd + 1] = '--force'
+        end
+        cmd[#cmd + 1] = path
+        util.system(cmd, function(_, stderr, rc)
+          if rc ~= 0 then
+            return util.msg(('azdo: %s'):format(vim.trim(stderr or 'git worktree remove failed')), vim.log.levels.ERROR)
+          end
+          -- Self-healing: a worktree deleted by hand earlier leaves a registration behind.
+          util.system({ 'git', '-C', main, 'worktree', 'prune' }, function() end)
+          close_tab_at(path)
+          M._wipe_pr_bufs(id, repo)
+          util.msg(('PR #%s: removed %s'):format(id, vim.fn.fnamemodify(path, ':~')))
+        end)
+      end
+
+      util.system({ 'git', '-C', path, 'status', '--porcelain' }, function(status)
+        local n = M._status_counts(status or '')
+        if n.modified == 0 and n.untracked == 0 then
+          return remove(false)
+        end
+        local what = {}
+        if n.modified > 0 then
+          what[#what + 1] = ('%d modified'):format(n.modified)
+        end
+        if n.untracked > 0 then
+          what[#what + 1] = ('%d untracked'):format(n.untracked)
+        end
+        vim.ui.select({ 'Remove anyway', 'Cancel' }, {
+          prompt = ('PR #%s worktree is not clean (%s). Remove it?'):format(id, table.concat(what, ', ')),
+        }, function(choice)
+          if choice == 'Remove anyway' then
+            remove(true)
+          end
         end)
       end)
     end)

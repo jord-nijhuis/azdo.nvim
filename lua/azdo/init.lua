@@ -57,6 +57,12 @@ function M.review()
   require('azdo.pr').review_pr()
 end
 
+--- Finishes the review of the PR in the current buffer: removes its worktree,
+--- closes its tab, drops its buffers. The counterpart to `co`.
+function M.finish()
+  require('azdo.pr').finish()
+end
+
 --- Edit the current PR's title/description or a work item's sections.
 function M.edit()
   require('azdo.pr').edit_pr()

@@ -200,72 +200,92 @@ in_temp_repo(function(dir)
   check('get_commit does not execute the sha', vim.uv.fs_stat(marker) ~= nil, false)
 end)
 
--- drop_pr_bufs: `checkout` clears the PR it is opening out of the tab you came from, so a stale
--- buffer cannot pull `show_pr` back there. It must leave other PRs and the `:Azdo` list alone, and
--- must never close the tab — these run against real tabpages, which work headlessly.
+-- wipe_pr_bufs: `checkout` and `finish` both start from a clean slate for one PR. Because
+-- `state.get_buf` hands back the same buffer forever, a survivor is not cosmetic — `show_pr`
+-- follows it to whichever tab displays it. Other PRs, the `:Azdo` list, and anything 'modified'
+-- (a comment draft that posts on ZZ) must survive.
 do
-  local drop = require('azdo.pr')._drop_pr_bufs
+  local wipe = require('azdo.pr')._wipe_pr_bufs
   local REPO = 'org/proj/repo'
 
-  --- Builds a tab whose windows show the given `b:azdo` values, newest window first.
-  --- @return integer tab, integer[] wins
-  local function tab_with(bufs)
-    vim.cmd.tabnew()
-    local tab = vim.api.nvim_get_current_tabpage()
-    for i, b in ipairs(bufs) do
-      if i > 1 then
-        vim.cmd.split()
-      end
-      local buf = vim.api.nvim_create_buf(false, true)
-      vim.b[buf].azdo = b
-      vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), buf)
+  --- @return integer buf
+  local function mk(azdo, modified)
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.b[buf].azdo = azdo
+    if modified then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { 'draft' })
     end
-    return tab, vim.api.nvim_tabpage_list_wins(tab)
+    return buf
+  end
+  local function alive(buf)
+    return vim.api.nvim_buf_is_valid(buf)
   end
 
-  --- The `feat`s still displayed in `tab`, sorted for a stable comparison.
-  local function feats_in(tab)
-    local out = {}
-    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      local b = vim.b[vim.api.nvim_win_get_buf(w)].azdo or {}
-      out[#out + 1] = b.feat or '-'
-    end
-    table.sort(out)
-    return out
+  local pr = mk({ feat = 'pr', id = 42, repo = REPO })
+  local diff = mk({ feat = 'prdiff', id = 42, repo = REPO })
+  local comments = mk({ feat = 'prcomments', id = 42, repo = REPO })
+  local other_pr = mk({ feat = 'pr', id = 99, repo = REPO })
+  local other_repo = mk({ feat = 'pr', id = 42, repo = 'org/proj/other' })
+  local status = mk({ feat = 'status', id = 'all' })
+  local draft = mk({ feat = 'comment', id = 42, repo = REPO }, true)
+  local plain = mk(nil)
+
+  wipe('42', REPO) -- string id: b:azdo.id is a number, callers may pass either
+
+  check('wipe: pr buffer gone', alive(pr), false)
+  check('wipe: diff gone', alive(diff), false)
+  check('wipe: comments gone', alive(comments), false)
+  check('wipe: another PR untouched', alive(other_pr), true)
+  check('wipe: same id other repo untouched', alive(other_repo), true)
+  check('wipe: the :Azdo list untouched', alive(status), true)
+  check('wipe: comment draft untouched', alive(draft), true)
+  check('wipe: non-azdo buffer untouched', alive(plain), true)
+
+  -- A rendered buffer that is somehow 'modified' is left alone too: the 'modified' guard is
+  -- the backstop, not the feat list.
+  local dirty_diff = mk({ feat = 'prdiff', id = 7, repo = REPO }, true)
+  wipe(7, REPO)
+  check('wipe: modified is honoured for rendered feats too', alive(dirty_diff), true)
+
+  -- Deleting a buffer closes the windows showing it, and a tab's last window takes the tab with
+  -- it. A wipe must not rearrange the layout, so the final window is emptied instead.
+  vim.cmd.tabnew()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local shown = mk({ feat = 'pr', id = 8, repo = REPO })
+  vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), shown)
+  wipe(8, REPO)
+  check('wipe: displayed buffer gone', alive(shown), false)
+  check('wipe: its tab survives', vim.api.nvim_tabpage_is_valid(tab), true)
+  check('wipe: sole window kept, emptied', #vim.api.nvim_tabpage_list_wins(tab), 1)
+
+  -- With a split to spare, the extra window closes rather than lingering empty.
+  local a = mk({ feat = 'pr', id = 9, repo = REPO })
+  local b = mk({ feat = 'prdiff', id = 9, repo = REPO })
+  vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), a)
+  vim.cmd.split()
+  vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), b)
+  wipe(9, REPO)
+  check('wipe: split closed, tab kept', #vim.api.nvim_tabpage_list_wins(tab), 1)
+  check('wipe: tab still valid after split close', vim.api.nvim_tabpage_is_valid(tab), true)
+  if vim.api.nvim_tabpage_is_valid(tab) and #vim.api.nvim_list_tabpages() > 1 then
+    vim.cmd.tabclose()
   end
 
-  -- The PR's own buffers go; the list and another PR's diff stay.
-  local t1 = tab_with({
-    { feat = 'pr', id = 42, repo = REPO },
-    { feat = 'prdiff', id = 42, repo = REPO },
-    { feat = 'status', id = 'all' },
-    { feat = 'prdiff', id = 99, repo = REPO },
-  })
-  drop(t1, 42, REPO)
-  -- Both matches close outright: emptying a window is only for the case below, where the
-  -- matches are everything the tab has.
-  check('drop_pr_bufs: keeps the list and other PRs', feats_in(t1), { 'prdiff', 'status' })
+  check('wipe: nothing to do is not an error', pcall(wipe, 12345, REPO), true)
+end
 
-  -- b:azdo.id is a number here and the caller may pass a string; compare as strings.
-  local t2 = tab_with({ { feat = 'pr', id = 42, repo = REPO }, { feat = 'status', id = 'all' } })
-  drop(t2, '42', REPO)
-  check('drop_pr_bufs: id compares across types', feats_in(t2), { 'status' })
-
-  -- Same id in a different repo is a different PR.
-  local t3 = tab_with({ { feat = 'pr', id = 42, repo = 'org/proj/other' } })
-  drop(t3, 42, REPO)
-  check('drop_pr_bufs: repo must match', feats_in(t3), { 'pr' })
-
-  -- Nothing left to show: the tab survives with an empty buffer rather than closing.
-  local t4 = tab_with({ { feat = 'pr', id = 42, repo = REPO }, { feat = 'prdiff', id = 42, repo = REPO } })
-  drop(t4, 42, REPO)
-  check('drop_pr_bufs: never closes the tab', vim.api.nvim_tabpage_is_valid(t4), true)
-  check('drop_pr_bufs: last window emptied', feats_in(t4), { '-' })
-
-  -- A dead tab handle is ignored rather than erroring.
-  local t5 = tab_with({ { feat = 'pr', id = 42, repo = REPO } })
-  vim.cmd.tabclose()
-  check('drop_pr_bufs: tolerates a stale tab handle', pcall(drop, t5, 42, REPO), true)
+-- status_counts: drives the "remove anyway?" prompt when finishing a review. Untracked files are
+-- counted apart because build output is the usual reason a review worktree is unclean, and saying
+-- so is the difference between an informed confirmation and a scary one.
+do
+  local sc = require('azdo.pr')._status_counts
+  check('status: clean', sc(''), { modified = 0, untracked = 0 })
+  check('status: only untracked', sc('?? bin/app\n?? node_modules/\n'), { modified = 0, untracked = 2 })
+  check('status: only modified', sc(' M lua/x.lua\n'), { modified = 1, untracked = 0 })
+  check('status: mixed', sc('?? bin/app\n M lua/x.lua\nA  new.lua\n'), { modified = 2, untracked = 1 })
+  -- A rename's arrow form and staged deletions are tracked changes, not untracked files.
+  check('status: renames and deletions count as modified', sc('R  a -> b\nD  c\n'), { modified = 2, untracked = 0 })
+  check('status: no trailing newline', sc('?? bin/app'), { modified = 0, untracked = 1 })
 end
 
 if n_fail > 0 then

@@ -206,6 +206,8 @@ To review a PR without doing a checkout in your repo:
 - Run `:AzdoMenu` for a command palette if you'd rather not memorize the
   commands and mappings. |:AzdoMenu|
 - All "azdo://…" buffers have the same basic mappings. |azdo-mappings|
+- Hit `co` to check the PR out in its own worktree and tab; the diff needs a
+  local clone, so this comes before `dd`. |azdo-checkout|
 - From the PR view, hit `dd` to toggle the diff. |azdo-diff|
 - PR comments are loaded:
   - in a 'scrollbind' split window next to the diff window (if the
@@ -214,6 +216,8 @@ To review a PR without doing a checkout in your repo:
     Navigate via |]d|/|[d|; peek with |CTRL-W_d|.
   - in the quickfix list ("Azdo comments"). |]q| |[q| |:copen|
 - Hit `cc` or `:AzdoComment` to comment on a diff line.
+- Hit `cq` when the review is done: removes the worktree, closes its tab, drops
+  the PR's buffers. |azdo-checkout|
 
                                                                  *azdo-confirm*
 To confirm an action (such as "merge", "post comment", "approve", etc.) which
@@ -264,6 +268,12 @@ Default mappings (local to `azdo://` buffers):
     <Plug>(azdo-edit)
   - `gW` Link a work item assigned to you to this PR. |:AzdoLink|
     <Plug>(azdo-link)
+  - `co` Check out this PR's branch in its own worktree, in a new tab, with the
+    PR beside it. Required before `dd`. |azdo-checkout|
+    <Plug>(azdo-checkout)
+  - `cq` Finish the review: remove that worktree, close its tab, drop the PR's
+    buffers. |azdo-checkout|
+    <Plug>(azdo-finish)
 - Cursor-relative actions:
   - `<Enter>` invokes |:Azdo| on the |WORD| at cursor.
     <Plug>(azdo-open)
@@ -299,6 +309,35 @@ Default mappings (local to `azdo://` buffers):
     with the new filter; the choice sticks across refreshes. |azdo-workitems|
     <Plug>(azdo-assignee)
 
+
+------------------------------------------------------------------------------
+Check out / finish a review                                      *azdo-checkout*
+
+`co` puts the PR's source branch in its own worktree and opens it in a new tab,
+with the PR rendered beside it. A worktree rather than `git switch`: reviewing
+someone's PR while your own work is in progress is the normal case, and moving
+the shared checkout out from under yourself to read a diff is the wrong trade.
+
+The tab gets its own working directory (|:tcd|), so pickers, grep and git in it
+scope to the worktree while the tab you came from keeps its own. `co` is also
+how `dd` gets something to diff against — the diff is built from a local clone,
+since Azure exposes no unified-diff endpoint.
+
+Idempotent in both directions: an existing worktree for the branch is reused
+wherever it lives, and a tab already sitting in it is switched to rather than
+duplicated. Pressing it again is therefore a safe way to get back to a review.
+The PR's own buffers are dropped as it opens, so a stale copy cannot pull the
+view back to the tab you started in.
+
+`cq` is the other end. It removes the worktree, closes its tab and drops the
+PR's buffers. Without it a worktree per reviewed PR accumulates indefinitely,
+and because build output lands inside each one they are large — the disk cost,
+not the tab, is what bites.
+
+`git worktree remove` refuses anything unclean, which for a worktree you have
+built in is the normal case, so `cq` reports what is there (modified files and
+untracked files counted separately) and asks before forcing. The branch is left
+alone: it may be one you had locally before the review.
 
 ------------------------------------------------------------------------------
 View PR diff                                                        *azdo-diff*

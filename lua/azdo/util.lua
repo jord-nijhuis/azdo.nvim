@@ -340,6 +340,11 @@ local KEYMAP_SPEC = {
     plug = '<Plug>(azdo-checkout)',
     desc = "Check out this PR's branch in a worktree, in a new tab",
   },
+  {
+    name = 'finish',
+    plug = '<Plug>(azdo-finish)',
+    desc = "Finish the review: remove this PR's worktree, close its tab",
+  },
 
   -- Comment-thread navigation: only useful in the diff + comments panes, where
   -- threads are anchored. (Both panes are line-aligned, so this works in either.)

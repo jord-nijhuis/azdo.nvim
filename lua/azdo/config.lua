@@ -193,6 +193,7 @@ M.defaults = {
     open_split = '<C-W><CR>',
     open_tab = '<C-W>t',
     checkout = 'co',
+    finish = 'cq',
     next_comment = ']c',
     prev_comment = '[c',
     tag_toggle = 't',
