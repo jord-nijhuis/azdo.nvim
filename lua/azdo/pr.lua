@@ -411,6 +411,48 @@ function M._parse_worktrees(porcelain)
   return out
 end
 
+--- Drops this PR's buffers from `tab` — the tab `co` was pressed from.
+---
+--- The checkout tab renders the PR itself, so whatever is left behind is a
+--- duplicate that `state.get_buf` would otherwise keep reusing, pulling you back
+--- to the old tab. Closing the window is enough to drop the buffer: every azdo
+--- buffer sets 'bufhidden' to "wipe".
+---
+--- Only this PR is touched — other PRs and the `:Azdo` list stay, so the tab
+--- remains somewhere to come back to and pick the next one. The tab itself is
+--- never closed: if these windows are all it has, the last one gets an empty
+--- buffer instead, since closing a tab out from under someone reviewing is a
+--- worse surprise than an empty window.
+---
+--- Exposed for tests.
+---
+--- @param tab integer tabpage handle
+--- @param id integer|string PR number
+--- @param repo string "org/project/repo"
+function M._drop_pr_bufs(tab, id, repo)
+  if not vim.api.nvim_tabpage_is_valid(tab) then
+    return
+  end
+  local stale = { pr = true, prdiff = true, prcomments = true }
+  local wins = vim.api.nvim_tabpage_list_wins(tab)
+  local remaining = #wins
+  for _, win in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(win) then
+      local b = vim.b[vim.api.nvim_win_get_buf(win)].azdo or {}
+      if stale[b.feat] and tostring(b.id) == tostring(id) and b.repo == repo then
+        if remaining > 1 then
+          if pcall(vim.api.nvim_win_close, win, false) then
+            remaining = remaining - 1
+          end
+        else
+          -- Last window in the tab: keep the tab, drop the buffer.
+          pcall(vim.api.nvim_win_set_buf, win, vim.api.nvim_create_buf(true, false))
+        end
+      end
+    end
+  end
+end
+
 --- Opens `path` in a tab, or switches to the tab already sitting there.
 ---
 --- Per-tab cwd (`:tcd`), so pickers, grep and git in that tab all scope to the
@@ -450,6 +492,9 @@ end
 --- duplicated.
 function M.checkout(opts)
   local _, id, repo = resolve_pr(opts)
+  -- Captured before the first await: by the time the callbacks run the user may
+  -- have moved, and it is the tab `co` was pressed from that we clean up.
+  local from = vim.api.nvim_get_current_tabpage()
   az.get_pr_data(id, repo, nil, function(pr)
     if not pr then
       return util.msg(('PR #%s not found'):format(id), vim.log.levels.ERROR)
@@ -470,6 +515,14 @@ function M.checkout(opts)
       -- The tab shows the PR too, so it is self-contained: correct cwd for the
       -- local diff, and `dd` / `co` still resolve a PR from inside it.
       local function show()
+        -- Before rendering, not after: `show_pr` reuses an existing buffer and
+        -- navigates to whichever tab already displays it, which would land you
+        -- back where you started. Dropping the stale copies first forces it to
+        -- render here. Skipped when `co` was pressed from inside the checkout
+        -- tab itself — those buffers are the ones we are keeping.
+        if from ~= vim.api.nvim_get_current_tabpage() then
+          M._drop_pr_bufs(from, id, repo)
+        end
         M.show_pr(id, repo, true)
       end
 

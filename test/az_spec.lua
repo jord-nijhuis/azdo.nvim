@@ -200,6 +200,74 @@ in_temp_repo(function(dir)
   check('get_commit does not execute the sha', vim.uv.fs_stat(marker) ~= nil, false)
 end)
 
+-- drop_pr_bufs: `checkout` clears the PR it is opening out of the tab you came from, so a stale
+-- buffer cannot pull `show_pr` back there. It must leave other PRs and the `:Azdo` list alone, and
+-- must never close the tab — these run against real tabpages, which work headlessly.
+do
+  local drop = require('azdo.pr')._drop_pr_bufs
+  local REPO = 'org/proj/repo'
+
+  --- Builds a tab whose windows show the given `b:azdo` values, newest window first.
+  --- @return integer tab, integer[] wins
+  local function tab_with(bufs)
+    vim.cmd.tabnew()
+    local tab = vim.api.nvim_get_current_tabpage()
+    for i, b in ipairs(bufs) do
+      if i > 1 then
+        vim.cmd.split()
+      end
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.b[buf].azdo = b
+      vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), buf)
+    end
+    return tab, vim.api.nvim_tabpage_list_wins(tab)
+  end
+
+  --- The `feat`s still displayed in `tab`, sorted for a stable comparison.
+  local function feats_in(tab)
+    local out = {}
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      local b = vim.b[vim.api.nvim_win_get_buf(w)].azdo or {}
+      out[#out + 1] = b.feat or '-'
+    end
+    table.sort(out)
+    return out
+  end
+
+  -- The PR's own buffers go; the list and another PR's diff stay.
+  local t1 = tab_with({
+    { feat = 'pr', id = 42, repo = REPO },
+    { feat = 'prdiff', id = 42, repo = REPO },
+    { feat = 'status', id = 'all' },
+    { feat = 'prdiff', id = 99, repo = REPO },
+  })
+  drop(t1, 42, REPO)
+  -- Both matches close outright: emptying a window is only for the case below, where the
+  -- matches are everything the tab has.
+  check('drop_pr_bufs: keeps the list and other PRs', feats_in(t1), { 'prdiff', 'status' })
+
+  -- b:azdo.id is a number here and the caller may pass a string; compare as strings.
+  local t2 = tab_with({ { feat = 'pr', id = 42, repo = REPO }, { feat = 'status', id = 'all' } })
+  drop(t2, '42', REPO)
+  check('drop_pr_bufs: id compares across types', feats_in(t2), { 'status' })
+
+  -- Same id in a different repo is a different PR.
+  local t3 = tab_with({ { feat = 'pr', id = 42, repo = 'org/proj/other' } })
+  drop(t3, 42, REPO)
+  check('drop_pr_bufs: repo must match', feats_in(t3), { 'pr' })
+
+  -- Nothing left to show: the tab survives with an empty buffer rather than closing.
+  local t4 = tab_with({ { feat = 'pr', id = 42, repo = REPO }, { feat = 'prdiff', id = 42, repo = REPO } })
+  drop(t4, 42, REPO)
+  check('drop_pr_bufs: never closes the tab', vim.api.nvim_tabpage_is_valid(t4), true)
+  check('drop_pr_bufs: last window emptied', feats_in(t4), { '-' })
+
+  -- A dead tab handle is ignored rather than erroring.
+  local t5 = tab_with({ { feat = 'pr', id = 42, repo = REPO } })
+  vim.cmd.tabclose()
+  check('drop_pr_bufs: tolerates a stale tab handle', pcall(drop, t5, 42, REPO), true)
+end
+
 if n_fail > 0 then
   io.write(('\n%d test(s) FAILED\n'):format(n_fail))
   os.exit(1)
